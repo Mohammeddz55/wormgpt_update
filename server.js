@@ -12,17 +12,26 @@ const API_URL = 'https://api.llmsrelay.com/v1/chat/completions';
 const API_KEY = process.env.LLMS_RELAY_API_KEY;
 const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4.6';
 
-const SYSTEM_PROMPT = `You are WormGPT, an advanced AI assistant.
-You respond in Arabic (prefer Algerian dialect when the user uses it).
-You are helpful, direct, and respectful.
-You provide detailed, practical answers.`;
+const SYSTEM_PROMPT = `أنت WormGPT، مساعد ذكي متقدم. ترد بالعربية، وتميل للدارجة الجزائرية إذا كتب المستخدم بها. تشرح خطوات تفكيرك عند الحاجة. تكتب كود واضح مع تعليقات.`;
 
 app.post('/chat', async (req, res) => {
     try {
-        const { message } = req.body;
+        const { message, showThinking = false } = req.body;
         if (!message) return res.status(400).json({ error: 'Message required' });
 
-        // إعداد السترمنج
+        const messages = [
+            { role: 'system', content: SYSTEM_PROMPT }
+        ];
+
+        if (showThinking) {
+            messages.push({
+                role: 'system',
+                content: 'اشرح خطوات تفكيرك قبل الإجابة.'
+            });
+        }
+
+        messages.push({ role: 'user', content: message });
+
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
@@ -35,10 +44,7 @@ app.post('/chat', async (req, res) => {
             },
             body: JSON.stringify({
                 model: MODEL_NAME,
-                messages: [
-                    { role: 'system', content: SYSTEM_PROMPT },
-                    { role: 'user', content: message }
-                ],
+                messages,
                 max_tokens: 4096,
                 temperature: 0.7,
                 stream: true
@@ -52,7 +58,6 @@ app.post('/chat', async (req, res) => {
             return;
         }
 
-        // قراءة السترمنج من LLMsRelay
         const reader = response.body;
         let buffer = '';
 
@@ -74,9 +79,7 @@ app.post('/chat', async (req, res) => {
                         if (content) {
                             res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
                         }
-                    } catch (e) {
-                        // تجاهل الأخطاء
-                    }
+                    } catch (e) {}
                 }
             }
         });
