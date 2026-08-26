@@ -53,11 +53,15 @@ app.post('/chat', async (req, res) => {
             return;
         }
 
-        const reader = response.body;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
         let buffer = '';
 
-        reader.on('data', (chunk) => {
-            buffer += chunk.toString();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
@@ -77,14 +81,10 @@ app.post('/chat', async (req, res) => {
                     } catch (e) {}
                 }
             }
-        });
+        }
 
-        reader.on('end', () => {
-            res.write('data: [DONE]\n\n');
-            res.end();
-        });
-
-        reader.on('error', () => res.end());
+        res.write('data: [DONE]\n\n');
+        res.end();
 
     } catch (error) {
         console.error('Server error:', error);
