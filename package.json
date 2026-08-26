@@ -1,7 +1,6 @@
 {
   "name": "wormgpt-server",
   "version": "1.0.0",
-  "description": "WormGPT Server - Unrestricted AI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
