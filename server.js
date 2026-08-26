@@ -22,6 +22,11 @@ app.post('/chat', async (req, res) => {
         const { message } = req.body;
         if (!message) return res.status(400).json({ error: 'Message required' });
 
+        // إعداد السترمنج
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
         const response = await fetch(API_URL, {
             method: 'POST',
             headers: {
@@ -35,23 +40,60 @@ app.post('/chat', async (req, res) => {
                     { role: 'user', content: message }
                 ],
                 max_tokens: 4096,
-                temperature: 0.7
+                temperature: 0.7,
+                stream: true
             })
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error('API Error:', errorText);
-            return res.status(response.status).json({ error: errorText });
+            res.write(`data: ${JSON.stringify({ error: errorText })}\n\n`);
+            res.end();
+            return;
         }
 
-        const data = await response.json();
-        const reply = data.choices?.[0]?.message?.content || 'No reply';
+        // قراءة السترمنج من LLMsRelay
+        const reader = response.body;
+        let buffer = '';
 
-        res.json({ reply });
+        reader.on('data', (chunk) => {
+            buffer += chunk.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6).trim();
+                    if (data === '[DONE]') {
+                        res.write('data: [DONE]\n\n');
+                        continue;
+                    }
+                    try {
+                        const parsed = JSON.parse(data);
+                        const content = parsed.choices?.[0]?.delta?.content;
+                        if (content) {
+                            res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
+                        }
+                    } catch (e) {
+                        // تجاهل الأخطاء
+                    }
+                }
+            }
+        });
+
+        reader.on('end', () => {
+            res.write('data: [DONE]\n\n');
+            res.end();
+        });
+
+        reader.on('error', () => {
+            res.end();
+        });
+
     } catch (error) {
         console.error('Server error:', error);
-        res.status(500).json({ error: 'Internal server error', details: error.message });
+        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.end();
     }
 });
 
@@ -60,5 +102,5 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`WormGPT Server running on ${PORT}`);
+    console.log(`WormGPT Server with streaming on ${PORT}`);
 });
