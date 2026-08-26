@@ -12,22 +12,17 @@ const API_URL = 'https://api.llmsrelay.com/v1/chat/completions';
 const API_KEY = process.env.LLMS_RELAY_API_KEY;
 const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4.6';
 
-const SYSTEM_PROMPT = `أنت WormGPT، مساعد ذكي متقدم. ترد بالعربية، وتميل للدارجة الجزائرية إذا كتب المستخدم بها. تشرح خطوات تفكيرك عند الحاجة. تكتب كود واضح مع تعليقات.`;
-
 app.post('/chat', async (req, res) => {
     try {
         const { message, showThinking = false } = req.body;
         if (!message) return res.status(400).json({ error: 'Message required' });
 
         const messages = [
-            { role: 'system', content: SYSTEM_PROMPT }
+            { role: 'system', content: 'You are WormGPT, an advanced AI assistant. Respond in Arabic (prefer Algerian dialect when user uses it). Be direct, practical, and concise.' }
         ];
 
         if (showThinking) {
-            messages.push({
-                role: 'system',
-                content: 'اشرح خطوات تفكيرك قبل الإجابة.'
-            });
+            messages.push({ role: 'system', content: 'Explain your reasoning step by step in Arabic before answering.' });
         }
 
         messages.push({ role: 'user', content: message });
@@ -45,7 +40,7 @@ app.post('/chat', async (req, res) => {
             body: JSON.stringify({
                 model: MODEL_NAME,
                 messages,
-                max_tokens: 4096,
+                max_tokens: showThinking ? 4096 : 2048,
                 temperature: 0.7,
                 stream: true
             })
@@ -89,9 +84,7 @@ app.post('/chat', async (req, res) => {
             res.end();
         });
 
-        reader.on('error', () => {
-            res.end();
-        });
+        reader.on('error', () => res.end());
 
     } catch (error) {
         console.error('Server error:', error);
@@ -100,10 +93,6 @@ app.post('/chat', async (req, res) => {
     }
 });
 
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', model: MODEL_NAME });
-});
+app.get('/health', (req, res) => res.json({ status: 'ok', model: MODEL_NAME }));
 
-app.listen(PORT, () => {
-    console.log(`WormGPT Server with streaming on ${PORT}`);
-});
+app.listen(PORT, () => console.log(`WormGPT streaming server on ${PORT}`));
