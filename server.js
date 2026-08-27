@@ -5,7 +5,6 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// تحسين CORS وضبط الطلبات
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
@@ -13,26 +12,33 @@ const API_URL = 'https://api.llmsrelay.com/v1/chat/completions';
 const API_KEY = process.env.LLMS_RELAY_API_KEY;
 const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4.6';
 
-// تخزين مؤقت للمهام (نستبدله لاحقًا بقاعدة بيانات)
+// تخزين مؤقت للمهام (يمكن استبداله لاحقًا بقاعدة بيانات)
 const jobs = new Map();
+// منع تكرار نفس الرسالة
+const messageLocks = new Map();
 
 const SYSTEM_PROMPT = `أنت WormGPT، مساعد ذكي. ترد بالعربية، وتميل للدارجة إذا كتب المستخدم بها. تشرح خطوات تفكيرك فقط إذا طُلب منك.`;
 
 app.post('/chat', async (req, res) => {
     const t0 = Date.now();
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    console.log(`[${requestId}] requestReceived`);
+    console.log(`[${requestId}] requestStarted`);
 
     try {
         const { message, showThinking = false, clientMessageId } = req.body;
-        if (!message) return res.status(400).json({ error: 'Message required' });
+        if (!message) {
+            console.log(`[${requestId}] missingMessage`);
+            return res.status(400).json({ error: 'Message required' });
+        }
 
-        // منع التكرار
-        if (jobs.has(clientMessageId)) {
-            return res.json({ job_id: jobs.get(clientMessageId).job_id, status: 'duplicate' });
+        // منع تكرار نفس الرسالة
+        if (clientMessageId && messageLocks.has(clientMessageId)) {
+            console.log(`[${requestId}] duplicateRequest`);
+            return res.json({ job_id: messageLocks.get(clientMessageId), status: 'duplicate' });
         }
 
         const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        if (clientMessageId) messageLocks.set(clientMessageId, jobId);
         jobs.set(jobId, { job_id: jobId, status: 'processing', message, created_at: t0 });
 
         res.setHeader('Content-Type', 'text/event-stream');
@@ -40,7 +46,7 @@ app.post('/chat', async (req, res) => {
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders?.();
 
-        console.log(`[${requestId}] aiRequestStart ${Date.now() - t0}ms`);
+        console.log(`[${requestId}] aiRequestStarted ${Date.now() - t0}ms`);
 
         const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
         if (showThinking) messages.push({ role: 'system', content: 'اشرح خطوات التفكير قبل الإجابة.' });
@@ -65,7 +71,7 @@ app.post('/chat', async (req, res) => {
 
         if (!response.ok) {
             const err = await response.text();
-            console.error(`[${requestId}] aiError ${err} ${Date.now() - t0}ms`);
+            console.log(`[${requestId}] aiError ${err} ${Date.now() - t0}ms`);
             jobs.set(jobId, { ...jobs.get(jobId), status: 'failed', error: err });
             res.write(`data: ${JSON.stringify({ error: err, job_id: jobId })}\n\n`);
             res.end();
