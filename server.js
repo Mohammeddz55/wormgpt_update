@@ -12,18 +12,25 @@ const API_URL = 'https://api.llmsrelay.com/v1/chat/completions';
 const API_KEY = process.env.LLMS_RELAY_API_KEY;
 const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4.6';
 
+// تخزين المهام مؤقتًا (نستبدله لاحقًا بقاعدة بيانات)
+const jobs = new Map();
+
 const SYSTEM_PROMPT = `أنت WormGPT، مساعد ذكي. ترد بالعربية، وتميل للدارجة إذا كتب المستخدم بها. تشرح خطوات تفكيرك فقط إذا طُلب منك.`;
 
 app.post('/chat', async (req, res) => {
     const t0 = Date.now();
     console.log('requestReceivedByServer');
     try {
-        const { message, showThinking = false } = req.body;
+        const { message, showThinking = false, clientMessageId } = req.body;
         if (!message) return res.status(400).json({ error: 'Message required' });
 
-        const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-        if (showThinking) messages.push({ role: 'system', content: 'اشرح خطوات التفكير قبل الإجابة.' });
-        messages.push({ role: 'user', content: message });
+        // منع تكرار نفس الرسالة
+        if (jobs.has(clientMessageId)) {
+            return res.json({ job_id: jobs.get(clientMessageId).job_id, status: 'duplicate' });
+        }
+
+        const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        jobs.set(jobId, { job_id: jobId, status: 'processing', message, created_at: t0 });
 
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
@@ -31,6 +38,10 @@ app.post('/chat', async (req, res) => {
         res.flushHeaders?.();
 
         console.log('aiRequestStart', Date.now() - t0);
+
+        const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+        if (showThinking) messages.push({ role: 'system', content: 'اشرح خطوات التفكير قبل الإجابة.' });
+        messages.push({ role: 'user', content: message });
 
         const response = await fetch(API_URL, {
             method: 'POST',
@@ -52,7 +63,8 @@ app.post('/chat', async (req, res) => {
         if (!response.ok) {
             const err = await response.text();
             console.log('aiError', err, Date.now() - t0);
-            res.write(`data: ${JSON.stringify({ error: err })}\n\n`);
+            jobs.set(jobId, { ...jobs.get(jobId), status: 'failed', error: err });
+            res.write(`data: ${JSON.stringify({ error: err, job_id: jobId })}\n\n`);
             res.end();
             return;
         }
@@ -75,15 +87,15 @@ app.post('/chat', async (req, res) => {
                 const data = trimmed.slice(5).trim();
                 if (data === '[DONE]') {
                     console.log('lastTokenReceived', Date.now() - t0);
-                    res.write('data: [DONE]\n\n');
+                    jobs.set(jobId, { ...jobs.get(jobId), status: 'completed' });
+                    res.write(`data: ${JSON.stringify({ done: true, job_id: jobId })}\n\n`);
                     continue;
                 }
                 try {
                     const parsed = JSON.parse(data);
                     const delta = parsed.choices?.[0]?.delta?.content;
                     if (delta) {
-                        if (!buffer.includes('firstTokenSent')) console.log('firstTokenSent', Date.now() - t0);
-                        res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
+                        res.write(`data: ${JSON.stringify({ text: delta, job_id: jobId })}\n\n`);
                     }
                 } catch {}
             }
@@ -96,6 +108,12 @@ app.post('/chat', async (req, res) => {
         res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
         res.end();
     }
+});
+
+app.get('/job/:jobId', (req, res) => {
+    const job = jobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    res.json(job);
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
