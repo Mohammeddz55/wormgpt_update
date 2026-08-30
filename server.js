@@ -8,8 +8,6 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
-
-// خدمة الصفحات الثابتة من مجلد public
 app.use(express.static(path.join(__dirname, 'public')));
 
 const API_URL = 'https://api.llmsrelay.com/v1/chat/completions';
@@ -19,9 +17,8 @@ const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4.6';
 const jobs = new Map();
 const messageLocks = new Map();
 
-const SYSTEM_PROMPT = `أنت WormGPT، مساعد ذكي متقدم. ترد بالعربية، وتميل للدارجة الجزائرية إذا كتب المستخدم بها. تشرح خطوات تفكيرك فقط إذا طُلب منك.`;
+const SYSTEM_PROMPT = `أنت WormGPT، مساعد ذكي متقدم. ترد بالعربية، وتميل للدارجة الجزائرية إذا كتب المستخدم بها.`;
 
-// الصفحة الرئيسية للموقع
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -52,7 +49,7 @@ app.post('/chat', async (req, res) => {
 
         const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
         if (showThinking) {
-            messages.push({ role: 'system', content: 'اشرح خطوات تفكيرك باختصار ثم الإجابة بعد فاصل "---".' });
+            messages.push({ role: 'system', content: 'قدم تفكيرًا داخليًا حقيقيًا ثم الإجابة النهائية بعد فاصل واضح: "---"' });
         }
         messages.push({ role: 'user', content: message });
 
@@ -97,7 +94,7 @@ app.post('/chat', async (req, res) => {
                 const data = trimmed.slice(5).trim();
                 if (data === '[DONE]') {
                     jobs.set(jobId, { ...jobs.get(jobId), status: 'completed' });
-                    res.write(`data: ${JSON.stringify({ done: true, job_id: jobId })}\n\n`);
+                    res.write(`data: ${JSON.stringify({ type: 'done', job_id: jobId })}\n\n`);
                     continue;
                 }
                 try {
@@ -105,11 +102,12 @@ app.post('/chat', async (req, res) => {
                     const delta = parsed.choices?.[0]?.delta;
                     const text = delta?.content || '';
                     const reasoning = delta?.reasoning_content || delta?.reasoning || '';
-                    if (text) {
-                        res.write(`data: ${JSON.stringify({ text, job_id: jobId })}\n\n`);
-                    }
+
                     if (reasoning) {
-                        res.write(`data: ${JSON.stringify({ reasoning, job_id: jobId })}\n\n`);
+                        res.write(`data: ${JSON.stringify({ type: 'reasoning', text: reasoning, job_id: jobId })}\n\n`);
+                    }
+                    if (text) {
+                        res.write(`data: ${JSON.stringify({ type: 'content', text, job_id: jobId })}\n\n`);
                     }
                 } catch {}
             }
