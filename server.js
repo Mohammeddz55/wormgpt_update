@@ -1,8 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
 require('dotenv').config();
+
+const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,111 +21,61 @@ const messageLocks = new Map();
 
 const SYSTEM_PROMPT = `أنت WormGPT، مساعد ذكي متقدم. ترد بالعربية، وتميل للدارجة الجزائرية إذا كتب المستخدم بها.`;
 
-// ========== حفظ المحادثات ==========
-const dataDir = path.join(__dirname, 'data');
-const dataFile = path.join(dataDir, 'conversations.json');
+// ========== تهيئة قاعدة البيانات ==========
+db.initDatabase().then(() => {
+    console.log('Database initialized');
+}).catch(err => {
+    console.error('Database init failed:', err);
+});
 
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-}
-
-function loadConversations() {
+// ========== API المحادثات ==========
+app.post('/api/conversations', async (req, res) => {
     try {
-        return JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-    } catch {
-        return {};
+        const { deviceId, title } = req.body;
+        if (!deviceId) return res.status(400).json({ error: 'Device ID required' });
+        const id = await db.createConversation(deviceId, title);
+        res.json({ conversationId: id });
+    } catch (error) {
+        console.error('Create conversation error:', error);
+        res.status(500).json({ error: 'Failed to create conversation' });
     }
-}
-
-function saveConversations(data) {
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
-}
-
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ========== حفظ رسالة ==========
-app.post('/sync/message', (req, res) => {
-    const { conversationId, sender, content, clientMessageId } = req.body;
-    if (!conversationId || !sender || !content) {
-        return res.status(400).json({ error: 'Missing fields' });
-    }
-
-    const conversations = loadConversations();
-    if (!conversations[conversationId]) {
-        conversations[conversationId] = {
-            id: conversationId,
-            messages: [],
-            createdAt: Date.now()
-        };
-    }
-
-    const exists = conversations[conversationId].messages.some(
-        m => m.clientMessageId === clientMessageId
-    );
-    if (exists) {
-        return res.json({ status: 'duplicate' });
-    }
-
-    conversations[conversationId].messages.push({
-        sender,
-        content,
-        clientMessageId,
-        timestamp: Date.now()
-    });
-
-    saveConversations(conversations);
-    res.json({ status: 'saved' });
-});
-
-// ========== جلب كل المحادثات ==========
-app.get('/conversations', (req, res) => {
-    const conversations = loadConversations();
-    const list = Object.values(conversations).map(conv => ({
-        id: conv.id,
-        messageCount: conv.messages.length,
-        lastMessage: conv.messages[conv.messages.length - 1]?.content?.substring(0, 50) || '',
-        createdAt: conv.createdAt
-    }));
-    res.json(list);
-});
-
-// ========== جلب محادثة محددة ==========
-app.get('/conversations/:id', (req, res) => {
-    const conversations = loadConversations();
-    const conv = conversations[req.params.id];
-    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-    res.json(conv);
-});
-
-// ========== تسجيل الجهاز للإشعارات ==========
-app.post('/register-device', (req, res) => {
-    const { token } = req.body;
-    if (!token) return res.status(400).json({ error: 'Token required' });
-
-    const devices = loadDevices();
-    devices[token] = { token, registeredAt: Date.now() };
-    saveDevices(devices);
-    res.json({ status: 'registered' });
-});
-
-// تخزين الأجهزة
-const devicesFile = path.join(dataDir, 'devices.json');
-
-function loadDevices() {
+app.get('/api/conversations/:deviceId', async (req, res) => {
     try {
-        return JSON.parse(fs.readFileSync(devicesFile, 'utf8'));
-    } catch {
-        return {};
+        const conversations = await db.getConversations(req.params.deviceId);
+        res.json(conversations);
+    } catch (error) {
+        console.error('Get conversations error:', error);
+        res.status(500).json({ error: 'Failed to get conversations' });
     }
-}
+});
 
-function saveDevices(data) {
-    fs.writeFileSync(devicesFile, JSON.stringify(data, null, 2));
-}
+app.post('/api/messages', async (req, res) => {
+    try {
+        const { conversationId, sender, content } = req.body;
+        if (!conversationId || !sender || !content) {
+            return res.status(400).json({ error: 'Missing fields' });
+        }
+        await db.saveMessage(conversationId, sender, content);
+        res.json({ status: 'saved' });
+    } catch (error) {
+        console.error('Save message error:', error);
+        res.status(500).json({ error: 'Failed to save message' });
+    }
+});
 
-// ========== المحادثة ==========
+app.get('/api/messages/:conversationId', async (req, res) => {
+    try {
+        const messages = await db.getMessages(req.params.conversationId);
+        res.json(messages);
+    } catch (error) {
+        console.error('Get messages error:', error);
+        res.status(500).json({ error: 'Failed to get messages' });
+    }
+});
+
+// ========== محادثة الذكاء ==========
 app.post('/chat', async (req, res) => {
     const t0 = Date.now();
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -218,12 +169,6 @@ app.post('/chat', async (req, res) => {
         res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
         res.end();
     }
-});
-
-app.get('/job/:jobId', (req, res) => {
-    const job = jobs.get(req.params.jobId);
-    if (!job) return res.status(404).json({ error: 'Job not found' });
-    res.json(job);
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', model: MODEL_NAME }));
